@@ -1,0 +1,21 @@
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/
+
+# ESPHome secrets — never commit
+firmware/secrets.yaml
+*secrets*
+
+# virtualenv
+firmware/.venv/
+
+# Local Claude context — not for public repo
+CLAUDE.md
+.claude/
+
+# Private sourcing details (brands, vendors, part numbers)
+docs/bom.md
+docs/sourcing-private.md
