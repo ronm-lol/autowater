@@ -40,14 +40,37 @@ logger:
 #   GPIO0, GPIO2, GPIO4, GPIO12, GPIO13, GPIO14, GPIO15, GPIO25, GPIO26, GPIO27
 # ADC1 (GPIO32–GPIO39) only. See docs/pinout.md for all assignments.
 
-# ── Soil moisture sensors ─────────────────────────────────────────────────────
+# ── Soil moisture sensors (Phase 3: all 10 via CD74HC4067 mux) ────────────────
+# Mux wiring: SIG→GPIO32, S0→GPIO19, S1→GPIO18, S2→GPIO5, S3→GPIO17,
+# VCC→3V3 (NOT 5V), GND→GND, EN→GND. Sensors on channels C0–C9.
+# Pothos moved from GPIO33 direct ADC to channel C0 (GPIO33 now free).
+# Calibration: V1.2 sensors at 3.3V, dry ≈ 2.2 V → wet ≈ 0.95 V (Pothos-derived
+# defaults; calibrate each plant in place and update its curve individually).
+
+cd74hc4067:
+  - id: soil_mux
+    pin_s0: GPIO19
+    pin_s1: GPIO18
+    pin_s2: GPIO5
+    pin_s3: GPIO17
+    delay: 5ms  # settling time after channel switch before ADC read
+
 sensor:
+  # Shared ADC — read only through the mux channels below, never directly
   - platform: adc
+    id: mux_adc
+    pin: GPIO32
+    attenuation: 11db
+    update_interval: never
+
+  # ── C0: Pothos ──
+  - platform: cd74hc4067
     id: pothos_raw
-    pin: GPIO33
+    cd74hc4067_id: soil_mux
+    number: 0
+    sensor: mux_adc
     name: "Pothos Moisture Raw"
     update_interval: 10s
-    attenuation: 11db
     unit_of_measurement: "V"
     entity_category: diagnostic
 
@@ -57,7 +80,214 @@ sensor:
     filters:
       - calibrate_linear:
           - 2.2 -> 0.0
-          - 1.05 -> 100.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+  # ── C1: Plant 2 ──
+  - platform: cd74hc4067
+    id: plant_2_raw
+    cd74hc4067_id: soil_mux
+    number: 1
+    sensor: mux_adc
+    name: "Plant 2 Moisture Raw"
+    update_interval: 10s
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+
+  - platform: copy
+    source_id: plant_2_raw
+    name: "Plant 2 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+  # ── C2: Plant 3 ──
+  - platform: cd74hc4067
+    id: plant_3_raw
+    cd74hc4067_id: soil_mux
+    number: 2
+    sensor: mux_adc
+    name: "Plant 3 Moisture Raw"
+    update_interval: 10s
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+
+  - platform: copy
+    source_id: plant_3_raw
+    name: "Plant 3 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+  # ── C3: Plant 4 ──
+  - platform: cd74hc4067
+    id: plant_4_raw
+    cd74hc4067_id: soil_mux
+    number: 3
+    sensor: mux_adc
+    name: "Plant 4 Moisture Raw"
+    update_interval: 10s
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+
+  - platform: copy
+    source_id: plant_4_raw
+    name: "Plant 4 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+  # ── C4: Plant 5 ──
+  - platform: cd74hc4067
+    id: plant_5_raw
+    cd74hc4067_id: soil_mux
+    number: 4
+    sensor: mux_adc
+    name: "Plant 5 Moisture Raw"
+    update_interval: 10s
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+
+  - platform: copy
+    source_id: plant_5_raw
+    name: "Plant 5 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+  # ── C5: Plant 6 ──
+  - platform: cd74hc4067
+    id: plant_6_raw
+    cd74hc4067_id: soil_mux
+    number: 5
+    sensor: mux_adc
+    name: "Plant 6 Moisture Raw"
+    update_interval: 10s
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+
+  - platform: copy
+    source_id: plant_6_raw
+    name: "Plant 6 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+  # ── C6: Plant 7 ──
+  - platform: cd74hc4067
+    id: plant_7_raw
+    cd74hc4067_id: soil_mux
+    number: 6
+    sensor: mux_adc
+    name: "Plant 7 Moisture Raw"
+    update_interval: 10s
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+
+  - platform: copy
+    source_id: plant_7_raw
+    name: "Plant 7 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+  # ── C7: Plant 8 ──
+  - platform: cd74hc4067
+    id: plant_8_raw
+    cd74hc4067_id: soil_mux
+    number: 7
+    sensor: mux_adc
+    name: "Plant 8 Moisture Raw"
+    update_interval: 10s
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+
+  - platform: copy
+    source_id: plant_8_raw
+    name: "Plant 8 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+  # ── C8: Plant 9 ──
+  - platform: cd74hc4067
+    id: plant_9_raw
+    cd74hc4067_id: soil_mux
+    number: 8
+    sensor: mux_adc
+    name: "Plant 9 Moisture Raw"
+    update_interval: 10s
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+
+  - platform: copy
+    source_id: plant_9_raw
+    name: "Plant 9 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+  # ── C9: Plant 10 ──
+  - platform: cd74hc4067
+    id: plant_10_raw
+    cd74hc4067_id: soil_mux
+    number: 9
+    sensor: mux_adc
+    name: "Plant 10 Moisture Raw"
+    update_interval: 10s
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+
+  - platform: copy
+    source_id: plant_10_raw
+    name: "Plant 10 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
       - clamp:
           min_value: 0
           max_value: 100

@@ -2,7 +2,7 @@
 
 Board: ESP32-DEVKITC-32E (38-pin, WROOM-32E module)
 
-Last updated: 2026-06-03
+Last updated: 2026-06-12
 
 ## Hard Constraints
 
@@ -18,17 +18,19 @@ Rationale: ADC2 is shared with the WiFi radio. Any ADC read on these pins return
 | GPIO | ADC | Function | Component | Notes |
 |------|-----|----------|-----------|-------|
 | GPIO32 | ADC1_CH4 | Mux SIG (analog in) | CD74HC4067 SIG pin | Single ADC input for all 10 soil sensors |
-| GPIO33 | — | Mux S0 | CD74HC4067 S0 | Select bit 0 |
-| GPIO34 | ADC1_CH6 | Mux S1 | CD74HC4067 S1 | Input-only pin; no internal pull-up |
-| GPIO35 | ADC1_CH7 | Mux S2 | CD74HC4067 S2 | Input-only pin; no internal pull-up |
-| GPIO36 | ADC1_CH0 | Mux S3 | CD74HC4067 S3 | Input-only (SVP); no internal pull-up |
+| GPIO19 | — | Mux S0 (output) | CD74HC4067 S0 | Select bit 0 (LSB) |
+| GPIO18 | — | Mux S1 (output) | CD74HC4067 S1 | Select bit 1 |
+| GPIO5 | — | Mux S2 (output) | CD74HC4067 S2 | Select bit 2. Strapping pin: brief glitch at boot is harmless here |
+| GPIO17 | — | Mux S3 (output) | CD74HC4067 S3 | Select bit 3 (MSB) |
+| GPIO33 | ADC1_CH5 | — free — | — | Freed 2026-06-12: was Pothos direct ADC (Phase 1–2); Pothos moved to mux channel C0 |
 | GPIO21 | — | I2C SDA | VL53L0X | Hardware I2C bus |
 | GPIO22 | — | I2C SCL | VL53L0X | Hardware I2C bus |
 | GPIO23 | — | Flood sensor input | XH-M131 + ESP32 GPIO | Interrupt-capable; pulled high |
 | TBD | — | Relay IN1–IN11 | 16-ch relay board | 11 GPIO for valves 1–10 + pump |
 | TBD | — | Status LED | Onboard or panel LED | Optional |
 
-> GPIO34, 35, 36, 39 are input-only (no internal pull-up/pull-down). Suitable for mux select only if driven by the mux board itself (which it is).
+> **Correction 2026-06-12:** S0–S3 were previously assigned to GPIO33/34/35/36. GPIO34–36 are input-only and cannot drive the mux select lines (S0–S3 are outputs FROM the ESP32 INTO the mux — the old note had the direction backwards). Reassigned to GPIO19/18/5/17.
+> GPIO34, 35, 36, 39 remain available as input-only ADC1 pins for future analog inputs. Mux EN pin ties directly to GND (active low, always enabled) — no GPIO needed.
 
 **Relay GPIO assignments (to be filled in Phase 5):**
 | Relay channel | GPIO | Controls |

@@ -37,7 +37,7 @@ The XH-M131 is a manufactured PCB that accepts water sensor probes and drives a 
 
 ### Flood Sensors
 
-Resistive water detection sensors placed in drip trays. 2–3 sensors per zone, wired in **parallel** to the transistor base circuit (OR logic: any wet sensor cuts power). The same sensors also connect to ESP32 GPIO interrupt pins for HA alerting and software-side disabling of relay outputs.
+Resistive water detection sensors placed in drip trays. 2–3 sensors per zone, wired in **parallel** to the XH-M131 sensor input (OR logic: any wet sensor cuts power). The same sensors also connect to ESP32 GPIO interrupt pins for HA alerting and software-side disabling of relay outputs.
 
 ### Drip Trays
 
@@ -47,8 +47,10 @@ Plants must sit in drip trays for flood detection to work. 2–3 grouped trays p
 - Enables: hardware-independent flood protection that survives ESP32 software failures
 - Enables: HA flood alerts via dual-path (hardware acts fast, software alerts user)
 - Requires: drip trays for all plants (small cost, good practice regardless)
-- Requires: discrete component assembly (transistor + relay + resistors); intermediate soldering skill
+- Requires: only screw-terminal wiring — the XH-M131 is a pre-built module, no perfboard assembly or soldering
 - Prevents: any watering while a flood condition exists (even intentional watering requires clearing the flood state)
 
 ## Kill Switch
-If the transistor circuit proves unstable (false positives causing pump to cut during normal operation), replace the discrete circuit with a dedicated flood sensor relay module (e.g., XH-M131) which provides the same hardware independence with a pre-built board.
+If the XH-M131 proves unstable (false positives cutting the pump during normal operation, or failure to trigger on wet probes during bench testing), fall back to a discrete NPN transistor + relay circuit on perfboard — same fail-safe topology, fully under our control, at the cost of assembly and soldering. Sensitivity-pot adjustment on the XH-M131 should be exhausted first.
+
+> **Edit 2026-06-12:** Consequences and Kill Switch sections originally described the discrete transistor circuit from a draft prior to the XH-M131 decision; updated to match the accepted decision. No change to the decision itself.
