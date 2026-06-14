@@ -1,108 +1,106 @@
 # ADR-008: Watering Control Logic
 
 ## Status
-Proposed
+Accepted (2026-06-14; rewritten 2026-06-13 — supersedes the earlier on-device-logic draft)
 
 ## Context
-Hardware decisions (ADR-002, ADR-004) settle *what* the system can do: one pump per zone, NC solenoid valves opened one at a time with the pump running, and a hardware flood killswitch that cuts 12V independently of software. This ADR settles *how* the system decides to water: where the control logic lives, what triggers a watering event, how much water is delivered, and which conditions inhibit watering.
+Hardware decisions (ADR-002, ADR-004) settle *what* the system can do: one pump per zone, NC solenoid valves opened one at a time with the pump running, and a hardware flood killswitch that cuts 12V independently of software. This ADR settles *how* the system decides to water, where that logic lives, and how it stays safe for moisture-sensitive plants.
 
-Hard requirements inherited from project constraints:
+Requirements:
 - Soil-moisture-triggered, NOT schedule-based
 - Per-plant independent sensing and output
-- Must operate fully offline — an internet or HA outage must not stop watering
+- Internet outage must not stop watering (note: HA runs **locally** on the mini PC, so this means the LAN/HA must keep working — it does not require surviving an HA-box crash)
 - One valve open at a time; pump on before any valve opens (ADR-002)
-- Flood state inhibits all watering (ADR-004; hardware enforces, firmware must also respect)
+- Flood state inhibits all watering (ADR-004; hardware enforces, firmware must cooperate)
+- **Moisture-sensitive plants need closed-loop start AND stop control, gentle enough never to overshoot**
+
+**The physical constraint that shapes everything: capacitive soil sensors lag.** Water added takes minutes to percolate to sensor depth, so watering cannot be driven by a live reading — "pump until it reads 75%" keeps pumping while the number crawls up and floods the pot. Watering must be **incremental**: a small sip → wait for the reading to *settle* → re-evaluate against the settled value.
 
 ## Options Considered
 
-| Option | Pros | Cons | Cost |
+| Option | Where the decision logic runs | Pros | Cons |
 |--------|------|------|------|
-| **A: All logic in Home Assistant automations** | Rich UI; easy iteration; no firmware changes to tune | Violates offline requirement — HA VM down = plants die quietly; latency; two sources of truth | $0 |
-| **B: All logic on-device (ESPHome), HA monitor-only** | Survives any HA/network outage; single source of truth; deterministic | Tuning requires OTA flash for every threshold change | $0 |
-| **C: Logic on-device, parameters adjustable from HA** | Offline-safe like B; thresholds/doses tunable live via HA number/switch entities, persisted to flash on the device | Slightly more firmware complexity (globals + restore_value entities) | $0 |
+| A: all logic in HA automations | HA | flexible, tweak in UI, HA has a real clock + database | watering stops if the HA box is down |
+| B: all logic on ESP32 | ESP32 | survives HA being down | must reflash to tune; no wall clock (uptime hacks); rigid control model |
+| C: ESP32 logic, HA tunes params | ESP32 | offline-safe + tunable | can't author the *logic* in HA; control model fixed in firmware |
+| **D (chosen): HA decides, ESP32 safely executes** | HA automation + ESP32 primitive | author and tune all per-plant watering logic in HA; closed-loop setpoint bands; ESP32 guarantees safe execution + hardware interlocks regardless of HA | automatic watering pauses if the HA box crashes (rare; safety unaffected) |
 
 ## Decision
-**Option C: all control logic runs in ESPHome firmware on each zone's ESP32. HA is a monitoring and tuning surface, never a dependency.**
+**Option D: Home Assistant owns the watering *decision*; the ESP32 is a safe *executor* and the authority for real-time safety.**
 
-### Time base — no wall clock dependency
+### Division of responsibility
 
-All durations (lockouts, caps, timestamps) are measured in **seconds of device uptime** (ESPHome uptime sensor; 32-bit seconds, no practical rollover). The system never depends on SNTP or HA-provided time, which would break offline. Consequence: runtime state (lockout timers, daily counters) **resets on reboot** — see Boot behavior for why this is safe.
+**ESP32 (per zone):**
+- Reads all sensors (soil via CD74HC4067 mux, reservoir via VL53L0X) and publishes them to HA
+- Detects implausible sensor readings and exposes a per-plant **fault flag**
+- Owns real-time safety, NOT delegated to HA:
+  - **Flood:** on the flood GPIO, immediately drive ALL relay outputs LOW and refuse all watering until clear
+  - **Reservoir low:** refuse watering (pump dry-run protection)
+  - **Boot:** all relays `RESTORE_MODE: ALWAYS_OFF`
+- Exposes exactly one watering action: **`water_plant(N, seconds)`** — performs pump-on → valve N open → run → valve N close → pump-off, `mode: single` (no overlap), **clamped to a hard maximum sip duration**, and refuses while any interlock is active
 
-### Parameter persistence
+**HA (per zone):**
+- Authors the per-plant watering logic and timing, fully tunable in the HA UI
+- Tracks settle timing, episode state, and daily counts using HA's own clock and helper entities
+- Calls the ESP32's `water_plant` action when its logic decides a sip is due
+- Alerts (sensor fault, flood, reservoir low, daily-cap anomaly)
 
-Only user-set parameters persist to flash (NVS): per-plant threshold and dose `number` entities and the global enable `switch`, all with `restore_value: true` and explicit `initial_value` in YAML so a blank-flash device is safe out of the box. These are written only on user change — no flash-wear concern. All runtime state (timers, counters, queue) is ephemeral by design.
+### Per-plant control model — closed-loop setpoint band, stepped
 
-### Boot behavior
+Each plant has four HA-side tunables:
+- **start %** — begin a watering episode when *settled* moisture falls below this
+- **stop %** — end the episode when *settled* moisture reaches this
+- **sip seconds** — water delivered per step
+- **settle minutes** — wait after a sip before re-reading, so decisions use settled (not lagging) moisture
 
-- All relay GPIOs (pump + valves): `RESTORE_MODE: ALWAYS_OFF` — every boot starts with pump off, valves closed, regardless of prior state.
-- A **boot lockout** (default = soak lockout duration, 60 min) applies to all plants on every boot. This makes reboots conservative: a brownout loop or repeated OTA cannot deliver repeated doses, even though runtime counters reset.
+Loop (per plant, in HA):
+1. Settled moisture `< start%` AND no interlock AND sensor valid → start an episode
+2. Call `water_plant(N, sip_seconds)`
+3. Wait `settle_minutes` (no further sip to this plant)
+4. Re-read: `< stop%` → another sip (step 2); `≥ stop%` → end episode
 
-### Control loop (per zone)
+Moisture-sensitive plants use **small sips + long settles** → a gentle climb that *cannot overshoot*, because every sip is gated on a fresh settled reading. Robust thirsty plants use bigger sips + shorter settles. This is stepped rather than continuous specifically because of sensor lag (see Context) — a live "pump to target" floods the pot.
 
-Every **15 minutes**, evaluate all plants and take a **snapshot** of eligibility (the queue is not re-evaluated mid-cycle):
-
-1. A plant is **eligible** when ALL of:
-   - Calibrated moisture below its per-plant threshold (default 30%)
-   - Not in soak lockout (default 60 min of uptime since that plant's last watering — water needs time to percolate to sensor depth)
-   - Zone daily cap not reached (a single zone-level counter of total watering events per 24 h of uptime — default ceiling ~18 Zone A / ~6 Zone B; tripping it halts automatic watering and alerts, signalling a leak / stuck valve / sensor drift. This replaces a per-plant cap: the soak lockout already stops any one plant being re-watered rapidly, so only *systemic* over-watering needs catching — 1–2 globals instead of ~18. Counter resets on reboot, which the boot lockout makes safe)
-   - Sensor not FAULTED (see Sensor fault handling)
-   - No zone interlock active (see Interlocks)
-2. Eligible plants are serviced sequentially:
-   - Pump ON → wait 1 s (pressure) → valve N OPEN → run plant N's dose seconds → valve N CLOSE → wait 2 s (manifold pressure settle) → next valve, pump stays on
-   - After the last plant's valve closes: wait 1 s → pump OFF
-   - Brief deadheading between valve switches is harmless for a small submersible centrifugal pump at <5 PSI
-3. A **hard per-cycle runtime cap** aborts the queue (valves closed, then pump off) if total pump-on time exceeds it. Derivation, Zone A: 9 plants × 8 s max dose + 8 × 2 s gaps + 1 s pre-run = 89 s; ×1.2 margin ≈ **110 s**. Zone B equivalent: 3 × 8 + 2 × 2 + 1 = 29 s; cap **40 s**. This is a logic-bug backstop independent of, and beneath, the hardware flood killswitch.
-
-### Dosing
-
-Time-based: per-plant dose in **seconds** via a `number` entity bounded **1–8 s, step 1** (at the ADR-002 nominal 300 mL/min, 8 s = 40 mL = the ADR-002 maximum dose; the bound enforces the spec). `initial_value`: 6 s (~30 mL) for tropicals, 3 s (~15 mL) for succulents. **Measure the actual flow rate at the bench test and update both this paragraph and the bound if it differs materially from 300 mL/min.** No flow sensor in v1 — dosing self-corrects via the moisture trigger, and the cap alert flags chronic over-delivery.
+### Why HA can own the decision safely
+- The flood killswitch is **hardware** (ADR-004) and the ESP32 enforces flood cutoff locally — neither depends on HA. So an HA crash can only cause a **missed watering**, never a flood.
+- HA runs **locally** on the mini PC, so an **internet** outage doesn't affect it — the hard "internet outage must not stop watering" requirement still holds. Only an HA-box failure pauses *automatic* watering (rare, recoverable; manual watering via the ESP32 action still works).
+- The ESP32's `water_plant` action is time-bounded (max-sip clamp), so even a buggy HA automation or a stuck command cannot run the pump indefinitely.
 
 ### Sensor fault handling — fail toward NOT watering
+A disconnected sensor seen through the mux does **not** read a safe 0 V — it floats to an indeterminate voltage, possibly inside the trigger band. Therefore:
+- Valid raw window: **0.5 V – 2.8 V** (V1.2 range is ~0.95 V wet to ~2.2 V dry; window gives headroom without admitting rail-ish float values)
+- A sensor is promoted to FAULTED after **3 consecutive** out-of-window readings (rejects mux switching transients); it auto-clears after **3 consecutive** in-window readings
+- The ESP32 exposes a per-plant fault `binary_sensor`; HA waters only on valid readings
+- **Commissioning:** measure each sensor's dry and wet voltage as it's installed — confirms the unit works, sets its per-plant calibration, and verifies the 0.5–2.8 V fault window comfortably brackets its real range (widen the window if any sensor falls outside)
 
-A disconnected sensor seen through the CD74HC4067 does **not** read a safe 0 V — a missing sensor leaves the selected channel high-Z and GPIO32 floats to an indeterminate voltage, potentially inside the trigger band. Therefore:
-
-- Valid raw window: **0.5 V – 2.8 V** (V1.2 range is ~0.95 V wet to ~2.2 V dry; the window gives headroom without admitting rail-ish float values)
-- A sensor is promoted to FAULTED only after **3 consecutive** out-of-window readings (rejects mux switching transients); it auto-clears after **3 consecutive** in-window readings but the plant stays ineligible until the next 15-min evaluation
-- FAULTED plants are excluded from automatic watering and exposed as a per-plant fault `binary_sensor` for HA alerting
-- Manual "water now" bypasses the sensor-fault check, the soak/boot lockouts, and the caps (a present human is overriding intentionally) — but still respects the **flood and reservoir-low interlocks** (safety, not automation guards). This also keeps commissioning usable: reboot freely and water on demand without waiting out the 60 min boot lockout
-
-### Interlocks — any one inhibits ALL watering in the zone, including "water now"
+### Interlocks (ESP32-enforced, exposed to HA)
 
 | Interlock | Source | Behavior |
 |-----------|--------|----------|
-| Flood detected | GPIO23 LOW (divider on gated rail, ADR-004) | **Immediately drive ALL relay outputs LOW (valves then pump), abort queue, inhibit, alert.** Firmware must not rely on the hardware 12V cut: the relay board's 5V logic rail is not cut by the killswitch, so a GPIO left HIGH would re-energize the pump the instant the hardware relay restores 12V — a restart-after-flood runaway. Firmware clears its outputs; watering resumes only via a fresh evaluation cycle after the flood clears |
-| Reservoir low | VL53L0X distance > threshold | Inhibit new cycles (pump dry-run protection); alert. Threshold set after reservoir purchase |
-| Global disable | HA switch entity (persisted) | User-level master off |
+| Flood detected | GPIO23 LOW (divider on gated rail, ADR-004) | ESP32 **immediately drives all relay outputs LOW** and refuses watering; exposed to HA for alerting. The relay board's 5 V logic isn't cut by the killswitch, so firmware must clear its own outputs — otherwise the pump re-energizes the instant the hardware relay restores 12 V (restart-after-flood runaway) |
+| Reservoir low | VL53L0X distance > threshold | ESP32 refuses sips (pump dry-run protection); HA alerts. Threshold set after reservoir purchase |
+| Global disable | HA switch entity (ESP32 also honors) | user-level master off |
 
-**Flood GPIO active level (resolved 2026-06-13; divider):** GPIO23 reads **LOW = flood, HIGH = dry**. ADR-004's resistor divider on the gated 12V rail: rail present (dry) → GPIO23 ~3V HIGH; flood cuts the rail → GPIO23 pulled LOW through the divider's lower resistor. **Fail-safe** — a broken 12V feed also pulls GPIO23 LOW = read as flood = stop watering. Firmware: `binary_sensor` on GPIO23, `inverted: true`, ON = flood.
+### Safety caps
+- **Max sip duration** — a hard ESP32 clamp on every `water_plant` call (e.g. 8 s ≈ 40 mL at the ADR-002 nominal 300 mL/min). No single sip can over-deliver regardless of what HA requests.
+- **Per-plant daily sip cap** — HA-side, using HA's clock, **configurable per plant**. Once a plant reaches its daily sip limit, no further automatic watering for that plant until the daily reset. This hard-bounds a non-converging plant (stuck sensor, clogged emitter, hydrophobic soil, popped tube): instead of sipping endlessly it is capped at (daily cap × max sip) per day. Sensitive plants get a low cap (e.g. 3); robust thirsty plants get more. No alert — a silent hard ceiling (accepted; plants are monitored by eye).
+- Measure actual pump flow rate at the bench test and update the sip↔mL mapping and the max-sip clamp.
 
 ### Known undetected failure mode (accepted for v1)
-
-A mechanically stuck-open valve or welded relay contact cannot be detected — there is no flow or valve-position feedback. With the pump off, a stuck-open NC valve passes no water (pump is the only pressure source), so the realistic exposure is over-delivery during a cycle. Backstops: per-cycle cap, rolling cap alert, and ultimately drip tray → hardware killswitch (ADR-004). A flow sensor is the v2 path (see Kill Switch).
-
-### HA surface (per zone)
-
-- Per plant: moisture %, raw voltage (diagnostic), threshold (number), dose seconds (number, 1–8 s), sensor-fault flag, last-watered (uptime-relative), "water now" button (respects flood/reservoir interlocks; bypasses soak/boot lockouts + caps)
-- Zone: global enable switch, reservoir level, flood alert, watering-in-progress indicator, zone cap-exceeded alert (the zone hitting its daily cap signals a leak, dead valve, or sensor drift)
-
-### Implementation notes (ESPHome reality)
-
-ESPHome YAML cannot build a runtime list and iterate it: the "queue" is implemented as a **static unrolled sequence** — one guarded block per plant inside a single `script` with `mode: single` (no re-entrancy), each block checking its plant's eligibility snapshot before acting. Uptime-seconds comparisons need small lambdas; this is the accepted scope of C++ in this project (single-expression conditions, no custom components).
+A mechanically stuck-open valve or welded relay contact cannot be detected — there is no flow or valve-position feedback. With the pump off, a stuck-open NC valve passes no water (the pump is the only pressure source), so the realistic exposure is over-delivery during a sip. Backstops: the max-sip clamp, the per-plant daily sip cap, and ultimately drip tray → hardware killswitch (ADR-004). A flow sensor is the v2 path.
 
 ### Explicitly deferred (not in v1)
-
-- **Quiet hours** — needs wall-clock time; offline-fragile. Revisit after living with the system.
+- **Quiet hours** — easy for HA to add now that it owns timing, but defer until the system is lived-with.
 - **Flow sensing / volume verification** — see Kill Switch.
-- **Multi-dose soak cycles** — the soak lockout approximates this at lower complexity.
+- **Weather / seasonal modulation** — a natural future benefit of HA owning the decision; not v1.
 
 ## Consequences
-- Enables: plants survive indefinite HA/internet outages; live tuning from HA without reflashing; bounded worst-case water release per cycle (cap × flow ≈ 550 mL Zone A) beneath the hardware killswitch
-- Requires: per-plant commissioning pass (threshold + dose); bench measurement of pump flow rate; a resistor divider per zone for flood sensing + flyback diodes across solenoids/pump (ADR-004)
-- Prevents: automatic watering on faulted sensors, during floods, with a low reservoir, or in rapid succession after reboots — the system fails dry, never wet
-- Risk remaining: time-based dosing drifts with pump age/tubing clogging (mitigated by moisture-trigger self-correction + cap alert); stuck-open valve undetectable in v1 (accepted above)
+- Enables: author and tweak every per-plant watering rule in the HA UI; closed-loop start/stop setpoint bands; gentle stepped watering that's safe for moisture-sensitive plants; HA's clock and database remove the on-device uptime/persistence hacks the earlier draft needed
+- Requires: per-plant HA automations (or one reusable blueprint); ESP32 firmware for the safe `water_plant` action + interlocks + sensor/fault exposure; bench flow-rate measurement; the flood divider + flyback diodes (ADR-004)
+- Prevents: overshoot on sensitive plants (stepped sips + settle); watering during flood, low reservoir, or on a faulted sensor (all ESP32-enforced); pump runaway (max-sip clamp)
+- Tradeoff accepted: automatic watering pauses if the **HA box** is down (not the internet — HA is local). Flood safety is hardware and unaffected; manual watering remains available.
 
 ## Kill Switch
-- If time-based dosing proves inaccurate in practice (consistent over/under-watering at stable dose settings), add an inline flow sensor and switch to volume-based dosing.
-- If sensor faults flap (repeated promote/clear cycles in HA logs), widen the debounce count or revisit the valid window — persistent flapping means the 5 ms mux settling delay needs raising.
-- If parameter tuning via HA number entities proves too fiddly, fall back to Option B with a YAML substitutions block per plant (tuning via OTA flash).
-- If uptime-based caps prove confusing in practice (counters resetting on reboot), add HA-provided time with explicit offline fallback — but only with evidence the simple model actually misbehaves.
+- If HA-box reliability proves inadequate (frequent crashes leaving plants unwatered), move the decision loop onto the ESP32 (toward Option C). The ESP32's safe `water_plant` primitive and interlocks stay put — only the decision relocates.
+- If the stepped closed-loop is too slow in practice for some plants, raise their sip size / shorten their settle.
+- If time-based sips drift with pump age or clogging, add an inline flow sensor and switch to volume-based sips.
