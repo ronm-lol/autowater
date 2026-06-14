@@ -1,0 +1,187 @@
+blueprint:
+  name: Autowater - Per-Plant Closed-Loop Watering (ADR-008)
+  description: >
+    Stepped, closed-loop setpoint-band watering for one plant. When SETTLED soil
+    moisture falls below `start %`, it delivers one sip via the ESP32
+    `water_plant` action, waits `settle minutes` for the reading to catch up
+    (capacitive sensors lag — see ADR-008), then re-evaluates: another sip while
+    below `stop %`, stop once reached. A per-plant daily sip cap hard-bounds a
+    non-converging plant (stuck sensor, clogged emitter, popped tube).
+
+    Safety interlocks (flood, reservoir-low, watering-disable) are ALSO enforced
+    on the ESP32 — the `water_plant` action refuses while any are active. The
+    checks here just avoid firing pointless calls and stop the loop promptly.
+
+    SETUP per plant:
+      1. Create a Counter helper (Settings > Devices & Services > Helpers) for
+         the daily sip count, e.g. `counter.zone_a_pothos_sips`. Set its initial
+         value 0; this blueprint resets it daily.
+      2. Create one automation from this blueprint per plant.
+    NOTE: `sip seconds` is a placeholder until the bench flow-rate test (ADR-008
+    assumes ~300 mL/min). The ESP32 hard-clamps any sip to 8 s regardless.
+  domain: automation
+  input:
+    moisture_sensor:
+      name: Soil moisture sensor
+      description: The plant's calibrated moisture % sensor (the `copy` entity, not the raw V).
+      selector:
+        entity:
+          domain: sensor
+    water_action:
+      name: ESP32 water_plant action
+      description: >
+        The zone's ESPHome action, e.g. `esphome.zone_a_water_plant`. Find it
+        under Developer Tools > Actions.
+      selector:
+        text:
+      default: esphome.zone_a_water_plant
+    plant_number:
+      name: Plant number (valve index)
+      description: Which valve this plant is on (Zone A 1-9, Zone B 1-3).
+      selector:
+        number:
+          min: 1
+          max: 15
+          mode: box
+      default: 1
+    start_pct:
+      name: Start % (begin watering below this)
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+          mode: slider
+      default: 35
+    stop_pct:
+      name: Stop % (end episode at/above this)
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+          mode: slider
+      default: 55
+    sip_seconds:
+      name: Sip seconds (per step)
+      description: Seconds of pump+valve per sip. ESP32 clamps to 8 s max.
+      selector:
+        number:
+          min: 1
+          max: 8
+          unit_of_measurement: "s"
+          mode: slider
+      default: 4
+    settle_minutes:
+      name: Settle minutes (wait between sips)
+      description: >
+        Time to let moisture percolate to sensor depth before re-reading.
+        Sensitive plants: long settle + small sip (cannot overshoot).
+      selector:
+        number:
+          min: 1
+          max: 120
+          unit_of_measurement: min
+          mode: box
+      default: 20
+    daily_counter:
+      name: Daily sip counter (helper)
+      description: A Counter helper created for this plant; reset daily by this automation.
+      selector:
+        entity:
+          domain: counter
+    daily_cap:
+      name: Daily sip cap
+      description: Max sips per day. Sensitive plants low (e.g. 3); thirsty plants higher.
+      selector:
+        number:
+          min: 1
+          max: 50
+          mode: box
+      default: 6
+    flood_sensor:
+      name: Flood binary_sensor
+      selector:
+        entity:
+          domain: binary_sensor
+    reservoir_low_sensor:
+      name: Reservoir-low binary_sensor
+      selector:
+        entity:
+          domain: binary_sensor
+    disable_switch:
+      name: Watering-disable switch
+      selector:
+        entity:
+          domain: switch
+
+# A plant can only have one episode running at a time; restart on re-trigger.
+mode: restart
+
+variables:
+  v_moisture: !input moisture_sensor
+  v_stop: !input stop_pct
+  v_counter: !input daily_counter
+  v_cap: !input daily_cap
+  v_flood: !input flood_sensor
+  v_res_low: !input reservoir_low_sensor
+  v_disable: !input disable_switch
+
+trigger:
+  # Re-check whenever the plant reads dry past the start threshold.
+  - platform: numeric_state
+    entity_id: !input moisture_sensor
+    below: !input start_pct
+    id: dry
+  # Reset the daily sip counter at local midnight.
+  - platform: time
+    at: "00:00:00"
+    id: daily_reset
+
+conditions: []
+
+action:
+  - choose:
+      # ── Daily counter reset ──
+      - conditions:
+          - condition: trigger
+            id: daily_reset
+        sequence:
+          - service: counter.reset
+            target:
+              entity_id: !input daily_counter
+
+      # ── Watering episode (stepped closed loop) ──
+      - conditions:
+          - condition: trigger
+            id: dry
+        sequence:
+          - repeat:
+              # Keep sipping while: still below stop%, under the daily cap, and
+              # no interlock active. Each iteration uses freshly-read states.
+              while:
+                - condition: numeric_state
+                  entity_id: !input moisture_sensor
+                  below: !input stop_pct
+                - condition: template
+                  value_template: "{{ states(v_counter) | int(0) < (v_cap | int) }}"
+                - condition: state
+                  entity_id: !input flood_sensor
+                  state: "off"
+                - condition: state
+                  entity_id: !input reservoir_low_sensor
+                  state: "off"
+                - condition: state
+                  entity_id: !input disable_switch
+                  state: "off"
+              sequence:
+                - service: !input water_action
+                  data:
+                    plant: !input plant_number
+                    seconds: !input sip_seconds
+                - service: counter.increment
+                  target:
+                    entity_id: !input daily_counter
+                # Wait for the reading to settle before the next evaluation.
+                - delay:
+                    minutes: !input settle_minutes

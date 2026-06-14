@@ -27,6 +27,18 @@ captive_portal:
 api:
   encryption:
     key: !secret api_key_zone_a
+  # HA calls this to deliver one sip (ADR-008). All safety lives in the
+  # water_plant script + interlocks below — HA only decides WHEN to sip.
+  actions:
+    - action: water_plant
+      variables:
+        plant: int
+        seconds: int
+      then:
+        - script.execute:
+            id: water_plant
+            plant: !lambda 'return plant;'
+            seconds: !lambda 'return seconds;'
 
 ota:
   - platform: esphome
@@ -40,6 +52,14 @@ i2c:
   sda: GPIO21
   scl: GPIO22
   scan: true   # logs any device found on the bus at boot — confirms the VL53L0X
+
+# ── Relay expander (ADR-009): 16-ch relay board driven via MCP23017 @ 0x20 ──────
+# Pump = ch0, Valves 1–9 = ch1–9 (see docs/pinout.md). Board is active-low, so
+# every relay switch uses `inverted: true` + `restore_mode: ALWAYS_OFF` → relays
+# power up OFF and a board-logic glitch can't energize the pump.
+mcp23017:
+  - id: relay_hub
+    address: 0x20
 
 # ── ADC note ──────────────────────────────────────────────────────────────────
 # ADC2 pins are unusable when WiFi is active. NEVER assign sensors to:
@@ -66,12 +86,16 @@ sensor:
   # Mount looking straight down at the water from the reservoir lid.
   # Distance ↑ = water level ↓. ADR-008 reservoir-low interlock: distance > threshold.
   - platform: vl53l0x
+    id: reservoir_distance
     name: "Zone A Reservoir Distance"
     address: 0x29
     update_interval: 60s
     unit_of_measurement: "mm"
     accuracy_decimals: 0
     long_range: true
+    # vl53l0x reports distance in METERS; convert to mm so the label is correct
+    filters:
+      - multiply: 1000.0
 
   # Shared ADC — read only through the mux channels below, never directly
   - platform: adc
@@ -310,3 +334,235 @@ binary_sensor:
     filters:
       - delayed_on: 100ms
       - delayed_off: 1s
+    # ADR-008 real-time safety: the hardware killswitch cuts 12V but NOT the relay
+    # board's 5V logic, so firmware must clear its own outputs or the pump
+    # re-energizes the instant 12V is restored (restart-after-flood runaway).
+    on_press:
+      then:
+        - script.stop: water_plant   # abort any sip in progress
+        - switch.turn_off: pump
+        - switch.turn_off: valve_1
+        - switch.turn_off: valve_2
+        - switch.turn_off: valve_3
+        - switch.turn_off: valve_4
+        - switch.turn_off: valve_5
+        - switch.turn_off: valve_6
+        - switch.turn_off: valve_7
+        - switch.turn_off: valve_8
+        - switch.turn_off: valve_9
+
+  # Reservoir-low interlock (ADR-008): water surface too far from the TOF sensor.
+  # distance > threshold ⇒ low. Threshold = (sensor-to-empty-bottom distance) −
+  # pump-submersion margin, measured PER RESERVOIR (see reservoir_low_threshold).
+  # No/unknown reading ⇒ fail safe: report low so watering is refused.
+  - platform: template
+    id: reservoir_low
+    name: "Zone A Reservoir Low"
+    device_class: problem
+    lambda: |-
+      if (id(reservoir_distance).has_state()) {
+        return id(reservoir_distance).state > id(reservoir_low_threshold).state;
+      }
+      return true;
+
+# ── Reservoir-low cutoff distance (mm), tunable in HA ──────────────────────────
+# This is a TOF distance (sensor → water surface), NOT a water depth. Calibrate
+# per reservoir: measure the distance the mounted sensor reads to the empty
+# bottom, then subtract your pump-submersion margin (~50 mm). e.g. 230 mm to
+# bottom − 50 mm ⇒ set 180. The 150 default is a placeholder — MUST be set after
+# the reservoir is in hand and the sensor is mounted.
+number:
+  - platform: template
+    id: reservoir_low_threshold
+    name: "Zone A Reservoir Low Threshold"
+    unit_of_measurement: "mm"
+    optimistic: true
+    restore_value: true
+    initial_value: 150
+    min_value: 20
+    max_value: 400
+    step: 5
+    entity_category: config
+    mode: box
+
+# ── Relays (ADR-009): pump + 9 valves via MCP23017, active-low ─────────────────
+# Exposed to HA for maintenance/purge/bench use. The water_plant script is the
+# normal path; flood forces all of these OFF regardless (see binary_sensor).
+switch:
+  - platform: gpio
+    name: "Zone A Pump"
+    id: pump
+    restore_mode: ALWAYS_OFF
+    pin:
+      mcp23xxx: relay_hub
+      number: 0
+      mode:
+        output: true
+      inverted: true
+
+  - platform: gpio
+    name: "Zone A Valve 1 (Pothos)"
+    id: valve_1
+    restore_mode: ALWAYS_OFF
+    pin:
+      mcp23xxx: relay_hub
+      number: 1
+      mode:
+        output: true
+      inverted: true
+
+  - platform: gpio
+    name: "Zone A Valve 2"
+    id: valve_2
+    restore_mode: ALWAYS_OFF
+    pin:
+      mcp23xxx: relay_hub
+      number: 2
+      mode:
+        output: true
+      inverted: true
+
+  - platform: gpio
+    name: "Zone A Valve 3"
+    id: valve_3
+    restore_mode: ALWAYS_OFF
+    pin:
+      mcp23xxx: relay_hub
+      number: 3
+      mode:
+        output: true
+      inverted: true
+
+  - platform: gpio
+    name: "Zone A Valve 4"
+    id: valve_4
+    restore_mode: ALWAYS_OFF
+    pin:
+      mcp23xxx: relay_hub
+      number: 4
+      mode:
+        output: true
+      inverted: true
+
+  - platform: gpio
+    name: "Zone A Valve 5"
+    id: valve_5
+    restore_mode: ALWAYS_OFF
+    pin:
+      mcp23xxx: relay_hub
+      number: 5
+      mode:
+        output: true
+      inverted: true
+
+  - platform: gpio
+    name: "Zone A Valve 6"
+    id: valve_6
+    restore_mode: ALWAYS_OFF
+    pin:
+      mcp23xxx: relay_hub
+      number: 6
+      mode:
+        output: true
+      inverted: true
+
+  - platform: gpio
+    name: "Zone A Valve 7"
+    id: valve_7
+    restore_mode: ALWAYS_OFF
+    pin:
+      mcp23xxx: relay_hub
+      number: 7
+      mode:
+        output: true
+      inverted: true
+
+  - platform: gpio
+    name: "Zone A Valve 8"
+    id: valve_8
+    restore_mode: ALWAYS_OFF
+    pin:
+      mcp23xxx: relay_hub
+      number: 8
+      mode:
+        output: true
+      inverted: true
+
+  - platform: gpio
+    name: "Zone A Valve 9"
+    id: valve_9
+    restore_mode: ALWAYS_OFF
+    pin:
+      mcp23xxx: relay_hub
+      number: 9
+      mode:
+        output: true
+      inverted: true
+
+  # Master watering disable (ADR-008 global interlock). Persists across reboots.
+  - platform: template
+    name: "Zone A Watering Disable"
+    id: global_disable
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+# ── water_plant(N, seconds): the one safe watering primitive (ADR-008) ─────────
+# Sequence: refuse if any interlock active → pump on → 500 ms prime → open valve
+# N → run (seconds, hard-clamped to MAX_SIP) → close valve → pump off.
+# mode: single ⇒ no overlapping sips (one valve open at a time, ADR-002).
+script:
+  - id: water_plant
+    mode: single
+    parameters:
+      plant: int
+      seconds: int
+    then:
+      - if:
+          condition:
+            lambda: 'return id(zone_a_flood).state || id(reservoir_low).state || id(global_disable).state;'
+          then:
+            - logger.log:
+                format: "water_plant(%d) REFUSED: flood=%d reservoir_low=%d disable=%d"
+                args: ['plant', 'id(zone_a_flood).state', 'id(reservoir_low).state', 'id(global_disable).state']
+          else:
+            - if:
+                condition:
+                  lambda: 'return plant < 1 || plant > 9;'
+                then:
+                  - logger.log:
+                      format: "water_plant: invalid plant %d (expected 1-9)"
+                      args: ['plant']
+                else:
+                  - switch.turn_on: pump
+                  - delay: 500ms   # prime the pump before any valve opens (ADR-002)
+                  - lambda: |-
+                      switch (plant) {
+                        case 1: id(valve_1).turn_on(); break;
+                        case 2: id(valve_2).turn_on(); break;
+                        case 3: id(valve_3).turn_on(); break;
+                        case 4: id(valve_4).turn_on(); break;
+                        case 5: id(valve_5).turn_on(); break;
+                        case 6: id(valve_6).turn_on(); break;
+                        case 7: id(valve_7).turn_on(); break;
+                        case 8: id(valve_8).turn_on(); break;
+                        case 9: id(valve_9).turn_on(); break;
+                      }
+                  # Hard max-sip clamp (ESP32-owned): no single sip exceeds 8 s
+                  # (~40 mL @ 300 mL/min nominal). Retune after bench flow test.
+                  - delay: !lambda |-
+                      int s = seconds;
+                      if (s < 0) s = 0;
+                      if (s > 8) s = 8;
+                      return s * 1000;
+                  # Close valve before pump off; turn ALL valves off so a bad
+                  # `plant` value can never leave one latched open.
+                  - switch.turn_off: valve_1
+                  - switch.turn_off: valve_2
+                  - switch.turn_off: valve_3
+                  - switch.turn_off: valve_4
+                  - switch.turn_off: valve_5
+                  - switch.turn_off: valve_6
+                  - switch.turn_off: valve_7
+                  - switch.turn_off: valve_8
+                  - switch.turn_off: valve_9
+                  - switch.turn_off: pump
