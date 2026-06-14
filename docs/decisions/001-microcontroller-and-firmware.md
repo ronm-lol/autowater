@@ -5,8 +5,8 @@ Accepted
 
 ## Context
 Each zone unit needs a microcontroller that can:
-- Read 2–10 analog soil moisture sensors
-- Control 3–11 relay channels (solenoid valves + pump)
+- Read 2–9 analog soil moisture sensors
+- Control 3–10 relay channels (solenoid valves + pump)
 - Monitor 2–3 digital flood sensor inputs with interrupt support
 - Run all watering decision logic locally (offline-safe)
 - Integrate with Home Assistant without a custom server

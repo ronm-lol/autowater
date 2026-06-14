@@ -69,17 +69,17 @@ Each phase proves a discrete piece of functionality with a simple bench test bef
 
 ---
 
-## Phase 3 — Zone A: CD74HC4067 Mux + All 10 Sensors
+## Phase 3 — Zone A: CD74HC4067 Mux + All 9 Sensors
 
-**Goal**: Read all 10 Zone A sensors sequentially through the CD74HC4067 mux on a single ADC1 pin.
+**Goal**: Read all 9 Zone A sensors sequentially through the CD74HC4067 mux on a single ADC1 pin.
 
-**Proves**: Mux select logic routes correctly, 3.3V VCC wiring is correct, all 10 sensors independently readable.
+**Proves**: Mux select logic routes correctly, 3.3V VCC wiring is correct, all 9 sensors independently readable.
 
 **Tests**:
 - [ ] Mux VCC wired to ESP32 3.3V rail (NOT 5V — HC logic at 5V requires 3.5V HIGH threshold which ESP32 3.3V GPIO cannot meet)
-- [ ] Each of 10 channels reads its own sensor independently (no channel bleed)
-- [ ] Sensor IDs cycle correctly in ESPHome YAML (10 sensor entities in HA)
-- [ ] All 10 sensors individually calibrated (air reading + water reading per sensor)
+- [ ] Each of 9 channels reads its own sensor independently (no channel bleed)
+- [ ] Sensor IDs cycle correctly in ESPHome YAML (9 sensor entities in HA)
+- [ ] All 9 sensors individually calibrated (air reading + water reading per sensor)
 - [ ] Readings stable during active WiFi (ADC1 only — confirm no ADC2 pins used)
 
 **ESPHome approach**: Use `custom` component or ESPHome's `cd74hc4067` support to cycle S0–S3 select pins and read `SIG` on one ADC1 pin per sensor poll.
@@ -121,10 +121,10 @@ Each phase proves a discrete piece of functionality with a simple bench test bef
 **Tests**:
 
 **Zone A — 16-ch board (ULN2803 Darlington, active-low)**:
-- [ ] Each of 11 channels (10 valves + pump) triggers on ESP32 GPIO LOW
+- [ ] Each of 10 channels (9 valves + pump) triggers on ESP32 GPIO LOW
 - [ ] Relay board VCC → 5V rail; JD-VCC → 12V rail (separate power rails per board spec)
-- [ ] All 11 channels audibly click and switch a test 12V LED or solenoid
-- [ ] 5 spare channels verified not interfering
+- [ ] All 10 channels audibly click and switch a test 12V LED or solenoid
+- [ ] 6 spare channels verified not interfering
 
 **Zone B — 4-ch board (optoisolated, active-low)**:
 - [ ] All 4 channels trigger correctly
@@ -279,8 +279,8 @@ Each phase proves a discrete piece of functionality with a simple bench test bef
 | Sensor fits ≤8cm pots (16mm wide) | 2 |
 | Zone B direct ADC (no mux) | 2 |
 | CD74HC4067 VCC at 3.3V | 3 |
-| Mux select routing, 10-channel poll | 3 |
-| All 10 sensors individually calibrated | 3 |
+| Mux select routing, 9-channel poll | 3 |
+| All 9 sensors individually calibrated | 3 |
 | 12V → 5V buck converter stable | 4 |
 | 5V rail independent from killswitch | 4, 7 |
 | 16-ch relay board (Zone A), active-low, GPIO-compatible | 5 |

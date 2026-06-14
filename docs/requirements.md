@@ -9,7 +9,7 @@
 ## Environment
 - **Location**: Indoor only
 - **Zones**: 2 decentralized zones (one unit per zone, each with own reservoir)
-  - Zone A: ~10 plants (mixed succulents/cacti + tropicals/houseplants)
+  - Zone A: ~9 plants (mixed succulents/cacti + tropicals/houseplants)
   - Zone B: 2–3 plants (includes rubber tree; consolidated from original zones 2 and 3)
 - **Pot sizes**: Smallest pots are 8–12cm (3–5") diameter
 
@@ -32,7 +32,7 @@
 - **Trigger**: Soil-moisture-based (hygrometer readings), not time-schedule-based
 - **Per-plant control**: Each plant needs an independently controllable water output
 - **Per-plant sensing**: Each plant needs its own soil moisture sensor
-- **Implication**: Zone A requires ~10 sensors + ~10 independent water outputs
+- **Implication**: Zone A requires ~9 sensors + ~9 independent water outputs
 
 ## Hardware & Skills
 - **Existing hardware**: None — starting from scratch

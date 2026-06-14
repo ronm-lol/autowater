@@ -10,16 +10,16 @@ Three approaches were evaluated:
 
 ## Options Considered
 
-| Option | Pros | Cons | Cost (Zone A, 10 plants) |
+| Option | Pros | Cons | Cost (Zone A, 9 plants) |
 |--------|------|------|------|
-| **A: One peristaltic pump per plant** | Simple control (relay = pump on/off); precise volume by time; independent per plant; no manifold | 10 pumps = expensive + bulky + noisy; more failure points | ~$80–150 CAD in pumps alone |
+| **A: One peristaltic pump per plant** | Simple control (relay = pump on/off); precise volume by time; independent per plant; no manifold | 9 pumps = expensive + bulky + noisy; more failure points | ~$80–150 CAD in pumps alone |
 | **B: One pump + solenoid manifold (parallel)** | Cheaper per-output than pumps; can open multiple valves simultaneously | Simultaneous watering complicates flood risk; manifold pressure balancing | ~$40–60 CAD |
 | **C: One pump + solenoid manifold (sequenced, one valve at a time)** | Same low cost as B; only one plant can receive water at a time → bounded flood risk; simpler logic | Sequential only; slightly longer cycle to water all plants | ~$40–60 CAD |
 
 ## Decision
 **Option C: Single submersible pump + normally-closed solenoid valves, one valve open at a time.**
 
-For plants this small (≤10cm pots, ≤40mL per event), sequencing is not a constraint — even watering 10 plants at 30 seconds each completes in under 5 minutes. The bounded flood risk is a significant advantage: a stuck-open solenoid combined with a stuck-closed pump relay can only affect one plant's drip tray at a time before the hardware killswitch trips (ADR-004).
+For plants this small (≤10cm pots, ≤40mL per event), sequencing is not a constraint — even watering 9 plants at 30 seconds each completes in under 5 minutes. The bounded flood risk is a significant advantage: a stuck-open solenoid combined with a stuck-closed pump relay can only affect one plant's drip tray at a time before the hardware killswitch trips (ADR-004).
 
 **Solenoid type: Normally-Closed (NC).** NC solenoids are closed when unpowered — power failure, ESP32 crash, or killswitch activation all result in all valves closing. This is the safe state.
 

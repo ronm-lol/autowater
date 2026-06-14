@@ -20,7 +20,7 @@ Each plant needs independent soil moisture monitoring to trigger watering only w
 
 Dimensions: 99mm × 16mm. At 16mm wide, these fit comfortably in 8cm (80mm) diameter pots. Analog output is compatible with the CD4067 multiplexer strategy.
 
-**Multiplexer for Zone A:** ESP32 ADC2 is unusable when WiFi is active; ADC1 has 8 channels (GPIO32–39). Zone A needs 10 sensors. Solution: CD4067 16-channel analog multiplexer driven by 4 ESP32 GPIO select pins, routing one sensor at a time to a single ADC1 pin. Zone B (2–3 sensors) connects directly to ADC1 without a mux.
+**Multiplexer for Zone A:** ESP32 ADC2 is unusable when WiFi is active; ADC1 has 8 channels (GPIO32–39). Zone A needs 9 sensors. Solution: CD4067 16-channel analog multiplexer driven by 4 ESP32 GPIO select pins, routing one sensor at a time to a single ADC1 pin. Zone B (2–3 sensors) connects directly to ADC1 without a mux.
 
 **Calibration requirement:** ESP32 ADC is non-linear. Every sensor must be individually calibrated using ESPHome's `calibrate_linear` filter:
 - Dry calibration: hold sensor in air → record raw ADC value (≈ 3100–3300)

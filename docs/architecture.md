@@ -6,7 +6,7 @@ Last updated: 2026-05-21
 
 Two independent, decentralized zone units. Each unit is self-contained: one ESP32 running ESPHome, one reservoir, one pump, N soil moisture sensors, N solenoid valves, and a hardware flood killswitch. Zones share no hardware and have no dependency on each other.
 
-- **Zone A**: ~10 plants (mixed succulents + tropicals)
+- **Zone A**: ~9 plants (mixed succulents + tropicals)
 - **Zone B**: 2–3 plants (includes rubber tree)
 
 ESPHome makes all watering decisions locally. Home Assistant receives telemetry and alerts over WiFi but has no role in watering logic — the system continues operating during internet or HA outages.
@@ -36,7 +36,7 @@ graph TB
         ESP -->|"4 select pins\n(GPIO)"| MUX
         MUX -->|"SIG → ADC1"| ESP
         ESP -->|"10 GPIO\n(relay channels)"| RELAY
-        RELAY -->|"10× NC solenoids"| MAN
+        RELAY -->|"9× NC solenoids"| MAN
         RELAY -->|"1 relay\n(pump on/off)"| PUMP
         PUMP -->|"inlet"| MAN
     end
@@ -44,14 +44,14 @@ graph TB
     subgraph SENSORS["Sensors (Zone A)"]
         S1["Soil Sensor 1\n(capacitive, analog)"] --> MUX
         S2["Soil Sensor 2"] --> MUX
-        SN["... Sensor 10"] --> MUX
+        SN["... Sensor 9"] --> MUX
         FS["Flood Sensors\n(resistive, in drip trays)\n2–3 per zone wired in parallel"]
     end
 
     subgraph PLANTS["Plants (Zone A)"]
         MAN -->|"drip line + NC solenoid"| P1["Plant 1"]
         MAN -->|"drip line + NC solenoid"| P2["Plant 2"]
-        MAN -->|"drip line + NC solenoid"| PN["... Plant 10"]
+        MAN -->|"drip line + NC solenoid"| PN["... Plant 9"]
     end
 
     FS -->|"hardware (parallel)"| HK
@@ -70,7 +70,7 @@ See ADR-001. ESPHome YAML config defines all sensors, valves, and automation log
 ### Soil Moisture Sensing
 See ADR-003.
 
-**Zone A (10 plants):** ESP32 ADC1 has 8 usable channels when WiFi is active. A CD4067 16:1 analog multiplexer routes all 10 sensors to a single ADC1 pin via 4 GPIO select pins. Sensors are read sequentially (no simultaneity needed for soil moisture). Each sensor has a configurable moisture threshold in the ESPHome config.
+**Zone A (9 plants):** ESP32 ADC1 has 8 usable channels when WiFi is active. A CD4067 16:1 analog multiplexer routes all 9 sensors to a single ADC1 pin via 4 GPIO select pins. Sensors are read sequentially (no simultaneity needed for soil moisture). Each sensor has a configurable moisture threshold in the ESPHome config.
 
 **Zone B (2–3 plants):** Sensors connect directly to ADC1 pins; no multiplexer required.
 

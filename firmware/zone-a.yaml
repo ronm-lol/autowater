@@ -35,6 +35,12 @@ ota:
 logger:
   level: DEBUG
 
+# ── I2C bus (shared: VL53L0X reservoir sensor 0x29, MCP23017 relay expander 0x20) ──
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true   # logs any device found on the bus at boot — confirms the VL53L0X
+
 # ── ADC note ──────────────────────────────────────────────────────────────────
 # ADC2 pins are unusable when WiFi is active. NEVER assign sensors to:
 #   GPIO0, GPIO2, GPIO4, GPIO12, GPIO13, GPIO14, GPIO15, GPIO25, GPIO26, GPIO27
@@ -56,6 +62,17 @@ cd74hc4067:
     delay: 5ms  # settling time after channel switch before ADC read
 
 sensor:
+  # ── Reservoir level (VL53L0X time-of-flight, I2C 0x29) ──
+  # Mount looking straight down at the water from the reservoir lid.
+  # Distance ↑ = water level ↓. ADR-008 reservoir-low interlock: distance > threshold.
+  - platform: vl53l0x
+    name: "Zone A Reservoir Distance"
+    address: 0x29
+    update_interval: 60s
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+    long_range: true
+
   # Shared ADC — read only through the mux channels below, never directly
   - platform: adc
     id: mux_adc
@@ -270,25 +287,26 @@ sensor:
           max_value: 100
     unit_of_measurement: "%"
 
-  # ── C9: Plant 10 ──
-  - platform: cd74hc4067
-    id: plant_10_raw
-    cd74hc4067_id: soil_mux
-    number: 9
-    sensor: mux_adc
-    name: "Plant 10 Moisture Raw"
-    update_interval: 10s
-    unit_of_measurement: "V"
-    entity_category: diagnostic
+  # C9–C15: spare mux channels (Zone A = 9 plants; add a plant sensor block here to expand)
 
-  - platform: copy
-    source_id: plant_10_raw
-    name: "Plant 10 Moisture"
+# ── Flood sensing (ADR-004): voltage divider on the gated 12V rail ────────────
+# Gated rail → 10k → node → 3.3k → GND (~3.0V at node when 12V present);
+# node → 1k series → GPIO23 (current limit / clamp protection).
+# Dry:   rail present → GPIO23 ~3V HIGH → off (dry).
+# Flood: XH-M131 cuts the rail → GPIO23 pulled to 0V via the lower resistor → on.
+# Fail-safe: a broken 12V feed also pulls GPIO23 LOW → reads as flood.
+# The watering interlock that consumes this (abort queue + inhibit) is Phase 5.
+binary_sensor:
+  - platform: gpio
+    id: zone_a_flood
+    pin:
+      number: GPIO23
+      mode:
+        input: true
+        pullup: false   # divider sets the level — do NOT enable internal pull-up
+      inverted: true   # divider: dry = HIGH, flood = LOW; invert so on = flood
+    name: "Zone A Flood"
+    device_class: moisture
     filters:
-      - calibrate_linear:
-          - 2.2 -> 0.0
-          - 0.95 -> 100.0
-      - clamp:
-          min_value: 0
-          max_value: 100
-    unit_of_measurement: "%"
+      - delayed_on: 100ms
+      - delayed_off: 1s

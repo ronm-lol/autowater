@@ -44,14 +44,14 @@ Every **15 minutes**, evaluate all plants and take a **snapshot** of eligibility
 1. A plant is **eligible** when ALL of:
    - Calibrated moisture below its per-plant threshold (default 30%)
    - Not in soak lockout (default 60 min of uptime since that plant's last watering — water needs time to percolate to sensor depth)
-   - Rolling cap not reached (default 3 events per plant per 24 h of uptime; counter resets on reboot, which the boot lockout makes safe)
+   - Zone daily cap not reached (a single zone-level counter of total watering events per 24 h of uptime — default ceiling ~18 Zone A / ~6 Zone B; tripping it halts automatic watering and alerts, signalling a leak / stuck valve / sensor drift. This replaces a per-plant cap: the soak lockout already stops any one plant being re-watered rapidly, so only *systemic* over-watering needs catching — 1–2 globals instead of ~18. Counter resets on reboot, which the boot lockout makes safe)
    - Sensor not FAULTED (see Sensor fault handling)
    - No zone interlock active (see Interlocks)
 2. Eligible plants are serviced sequentially:
    - Pump ON → wait 1 s (pressure) → valve N OPEN → run plant N's dose seconds → valve N CLOSE → wait 2 s (manifold pressure settle) → next valve, pump stays on
    - After the last plant's valve closes: wait 1 s → pump OFF
    - Brief deadheading between valve switches is harmless for a small submersible centrifugal pump at <5 PSI
-3. A **hard per-cycle runtime cap** aborts the queue (valves closed, then pump off) if total pump-on time exceeds it. Derivation, Zone A: 10 plants × 8 s max dose + 9 × 2 s gaps + 1 s pre-run = 99 s; ×1.2 margin ≈ **120 s**. Zone B equivalent: 3 × 8 + 2 × 2 + 1 = 29 s; cap **40 s**. This is a logic-bug backstop independent of, and beneath, the hardware flood killswitch.
+3. A **hard per-cycle runtime cap** aborts the queue (valves closed, then pump off) if total pump-on time exceeds it. Derivation, Zone A: 9 plants × 8 s max dose + 8 × 2 s gaps + 1 s pre-run = 89 s; ×1.2 margin ≈ **110 s**. Zone B equivalent: 3 × 8 + 2 × 2 + 1 = 29 s; cap **40 s**. This is a logic-bug backstop independent of, and beneath, the hardware flood killswitch.
 
 ### Dosing
 
@@ -64,17 +64,17 @@ A disconnected sensor seen through the CD74HC4067 does **not** read a safe 0 V �
 - Valid raw window: **0.5 V – 2.8 V** (V1.2 range is ~0.95 V wet to ~2.2 V dry; the window gives headroom without admitting rail-ish float values)
 - A sensor is promoted to FAULTED only after **3 consecutive** out-of-window readings (rejects mux switching transients); it auto-clears after **3 consecutive** in-window readings but the plant stays ineligible until the next 15-min evaluation
 - FAULTED plants are excluded from automatic watering and exposed as a per-plant fault `binary_sensor` for HA alerting
-- Manual "water now" for a FAULTED plant works — the fault override bypasses **only the sensor eligibility check**, never interlocks, lockouts, or caps
+- Manual "water now" bypasses the sensor-fault check, the soak/boot lockouts, and the caps (a present human is overriding intentionally) — but still respects the **flood and reservoir-low interlocks** (safety, not automation guards). This also keeps commissioning usable: reboot freely and water on demand without waiting out the 60 min boot lockout
 
 ### Interlocks — any one inhibits ALL watering in the zone, including "water now"
 
 | Interlock | Source | Behavior |
 |-----------|--------|----------|
-| Flood detected | Flood GPIO (GPIO23) | **Immediately drive ALL relay outputs LOW (valves then pump), abort queue, inhibit, alert.** Firmware must not rely on the hardware 12V cut: the relay board's 5V logic rail is not cut by the killswitch, so a GPIO left HIGH would re-energize the pump the instant the hardware relay restores 12V — a restart-after-flood runaway. Firmware clears its outputs; watering resumes only via a fresh evaluation cycle after the flood clears |
+| Flood detected | GPIO23 LOW (divider on gated rail, ADR-004) | **Immediately drive ALL relay outputs LOW (valves then pump), abort queue, inhibit, alert.** Firmware must not rely on the hardware 12V cut: the relay board's 5V logic rail is not cut by the killswitch, so a GPIO left HIGH would re-energize the pump the instant the hardware relay restores 12V — a restart-after-flood runaway. Firmware clears its outputs; watering resumes only via a fresh evaluation cycle after the flood clears |
 | Reservoir low | VL53L0X distance > threshold | Inhibit new cycles (pump dry-run protection); alert. Threshold set after reservoir purchase |
 | Global disable | HA switch entity (persisted) | User-level master off |
 
-**Flood GPIO active level: TBD at bench.** ADR-004 wires the probe line to both the XH-M131 input and GPIO23; the resting level depends on the module's probe bias. Verify with a multimeter during the flood bench test and record here (assumption to verify: dry = HIGH with pull-up, wet = LOW).
+**Flood GPIO active level (resolved 2026-06-13; divider):** GPIO23 reads **LOW = flood, HIGH = dry**. ADR-004's resistor divider on the gated 12V rail: rail present (dry) → GPIO23 ~3V HIGH; flood cuts the rail → GPIO23 pulled LOW through the divider's lower resistor. **Fail-safe** — a broken 12V feed also pulls GPIO23 LOW = read as flood = stop watering. Firmware: `binary_sensor` on GPIO23, `inverted: true`, ON = flood.
 
 ### Known undetected failure mode (accepted for v1)
 
@@ -82,8 +82,8 @@ A mechanically stuck-open valve or welded relay contact cannot be detected — t
 
 ### HA surface (per zone)
 
-- Per plant: moisture %, raw voltage (diagnostic), threshold (number), dose seconds (number, 1–8 s), sensor-fault flag, last-watered (uptime-relative), "water now" button (respects interlocks, lockouts, caps)
-- Zone: global enable switch, reservoir level, flood alert, watering-in-progress indicator, cap-exceeded alert (a plant repeatedly hitting its cap signals a leak, dead valve, or sensor drift)
+- Per plant: moisture %, raw voltage (diagnostic), threshold (number), dose seconds (number, 1–8 s), sensor-fault flag, last-watered (uptime-relative), "water now" button (respects flood/reservoir interlocks; bypasses soak/boot lockouts + caps)
+- Zone: global enable switch, reservoir level, flood alert, watering-in-progress indicator, zone cap-exceeded alert (the zone hitting its daily cap signals a leak, dead valve, or sensor drift)
 
 ### Implementation notes (ESPHome reality)
 
@@ -96,8 +96,8 @@ ESPHome YAML cannot build a runtime list and iterate it: the "queue" is implemen
 - **Multi-dose soak cycles** — the soak lockout approximates this at lower complexity.
 
 ## Consequences
-- Enables: plants survive indefinite HA/internet outages; live tuning from HA without reflashing; bounded worst-case water release per cycle (cap × flow ≈ 600 mL Zone A) beneath the hardware killswitch
-- Requires: per-plant commissioning pass (threshold + dose); bench measurement of pump flow rate; bench verification of flood GPIO polarity
+- Enables: plants survive indefinite HA/internet outages; live tuning from HA without reflashing; bounded worst-case water release per cycle (cap × flow ≈ 550 mL Zone A) beneath the hardware killswitch
+- Requires: per-plant commissioning pass (threshold + dose); bench measurement of pump flow rate; a resistor divider per zone for flood sensing + flyback diodes across solenoids/pump (ADR-004)
 - Prevents: automatic watering on faulted sensors, during floods, with a low reservoir, or in rapid succession after reboots — the system fails dry, never wet
 - Risk remaining: time-based dosing drifts with pump age/tubing clogging (mitigated by moisture-trigger self-correction + cap alert); stuck-open valve undetectable in v1 (accepted above)
 

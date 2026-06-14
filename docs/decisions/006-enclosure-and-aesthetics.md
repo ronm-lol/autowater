@@ -6,7 +6,7 @@ Accepted
 ## Context
 The system is semi-visible in a living space. The user's aesthetic direction is minimal/modern: clean lines, no exposed wires, matte finish. Generic off-the-shelf ABS project boxes are not acceptable. Reservoirs are separate attractive containers chosen by the user — the electronics enclosure is the design challenge.
 
-The soil sensor cables (up to 10 in Zone A) are the hardest aesthetic problem: 10 thin cables running from the enclosure to individual pots will look messy without deliberate cable management.
+The soil sensor cables (up to 9 in Zone A) are the hardest aesthetic problem: 9 thin cables running from the enclosure to individual pots will look messy without deliberate cable management.
 
 ## Options Considered
 
@@ -40,7 +40,7 @@ Design in white or light grey PETG. Professional print services achieve signific
 
 ### Soil Sensor Cable Management
 
-This is the primary aesthetic challenge. 10 sensor cables from the enclosure to 10 pots will look messy without management.
+This is the primary aesthetic challenge. 9 sensor cables from the enclosure to 9 pots will look messy without management.
 
 **Mitigation strategy:**
 1. **Bundle from enclosure to plant area**: Route all sensor cables together in a braided cable sleeve (PET expandable sleeving, black or white) until they reach the plant zone. The sleeve exits through one large cable gland on the enclosure rear.

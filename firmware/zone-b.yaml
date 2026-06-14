@@ -39,3 +39,102 @@ logger:
 # ADC2 pins are unusable when WiFi is active. NEVER assign sensors to:
 #   GPIO0, GPIO2, GPIO4, GPIO12, GPIO13, GPIO14, GPIO15, GPIO25, GPIO26, GPIO27
 # ADC1 (GPIO32–GPIO39) only. See docs/pinout.md for all assignments.
+
+# ── I2C bus (VL53L0X reservoir sensor 0x29; Zone B drives relays direct, no expander) ──
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+
+# ── Soil moisture (3 sensors, DIRECT ADC — no mux in Zone B) + reservoir level ────
+# Calibration: V1.2 sensors at 3.3V, dry ≈ 2.2 V → wet ≈ 0.95 V (per-plant calibrate in place).
+sensor:
+  # ── Reservoir level (VL53L0X ToF, I2C 0x29) — mount looking down at water ──
+  - platform: vl53l0x
+    name: "Reservoir Distance"
+    address: 0x29
+    update_interval: 60s
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+    long_range: true
+
+  # ── Plant 1 (GPIO32, ADC1_CH4) ──
+  - platform: adc
+    id: plant_b1_raw
+    pin: GPIO32
+    name: "Plant 1 Moisture Raw"
+    update_interval: 10s
+    attenuation: 11db
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+  - platform: copy
+    source_id: plant_b1_raw
+    name: "Plant 1 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+  # ── Plant 2 (GPIO33, ADC1_CH5) ──
+  - platform: adc
+    id: plant_b2_raw
+    pin: GPIO33
+    name: "Plant 2 Moisture Raw"
+    update_interval: 10s
+    attenuation: 11db
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+  - platform: copy
+    source_id: plant_b2_raw
+    name: "Plant 2 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+  # ── Plant 3 (GPIO34, ADC1_CH6 — input-only pin, fine for ADC) ──
+  - platform: adc
+    id: plant_b3_raw
+    pin: GPIO34
+    name: "Plant 3 Moisture Raw"
+    update_interval: 10s
+    attenuation: 11db
+    unit_of_measurement: "V"
+    entity_category: diagnostic
+  - platform: copy
+    source_id: plant_b3_raw
+    name: "Plant 3 Moisture"
+    filters:
+      - calibrate_linear:
+          - 2.2 -> 0.0
+          - 0.95 -> 100.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+    unit_of_measurement: "%"
+
+# ── Flood sensing (ADR-004): voltage divider on the gated 12V rail ────────────
+# Dry: rail present → GPIO23 ~3V HIGH → off. Flood: rail cut → GPIO23 LOW → on.
+# Fail-safe: broken feed also pulls GPIO23 LOW → reads as flood.
+binary_sensor:
+  - platform: gpio
+    id: zone_b_flood
+    pin:
+      number: GPIO23
+      mode:
+        input: true
+        pullup: false
+      inverted: true
+    name: "Flood"
+    device_class: moisture
+    filters:
+      - delayed_on: 100ms
+      - delayed_off: 1s
