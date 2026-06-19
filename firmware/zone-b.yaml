@@ -27,6 +27,18 @@ captive_portal:
 api:
   encryption:
     key: !secret api_key_zone_b
+  # HA calls this to deliver one sip (ADR-008). All safety lives in the
+  # water_plant script + interlocks below — HA only decides WHEN to sip.
+  actions:
+    - action: water_plant
+      variables:
+        plant: int
+        seconds: int
+      then:
+        - script.execute:
+            id: water_plant
+            plant: !lambda 'return plant;'
+            seconds: !lambda 'return seconds;'
 
 ota:
   - platform: esphome
@@ -51,12 +63,16 @@ i2c:
 sensor:
   # ── Reservoir level (VL53L0X ToF, I2C 0x29) — mount looking down at water ──
   - platform: vl53l0x
+    id: reservoir_distance
     name: "Reservoir Distance"
     address: 0x29
     update_interval: 60s
     unit_of_measurement: "mm"
     accuracy_decimals: 0
     long_range: true
+    # vl53l0x reports distance in METERS; convert to mm so the label is correct
+    filters:
+      - multiply: 1000.0
 
   # ── Plant 1 (GPIO32, ADC1_CH4) ──
   - platform: adc
@@ -138,3 +154,135 @@ binary_sensor:
     filters:
       - delayed_on: 100ms
       - delayed_off: 1s
+    # ADR-008 real-time safety: killswitch cuts 12V but not the relay board's 5V
+    # logic, so firmware must clear its own outputs or the pump re-energizes the
+    # instant 12V is restored (restart-after-flood runaway).
+    on_press:
+      then:
+        - script.stop: water_plant
+        - switch.turn_off: pump
+        - switch.turn_off: valve_1
+        - switch.turn_off: valve_2
+        - switch.turn_off: valve_3
+
+  # Reservoir-low interlock (ADR-008): distance > threshold ⇒ low. Threshold =
+  # (sensor-to-empty-bottom distance) − pump-submersion margin, per reservoir.
+  # No/unknown reading ⇒ fail safe: report low so watering is refused.
+  - platform: template
+    id: reservoir_low
+    name: "Reservoir Low"
+    device_class: problem
+    lambda: |-
+      if (id(reservoir_distance).has_state()) {
+        return id(reservoir_distance).state > id(reservoir_low_threshold).state;
+      }
+      return true;
+
+# ── Reservoir-low cutoff distance (mm), tunable in HA ──────────────────────────
+# TOF distance (sensor → water surface), NOT water depth. Calibrate per reservoir:
+# distance the mounted sensor reads to the empty bottom, minus the pump-submersion
+# margin (~50 mm). 150 default is a placeholder — set after the reservoir is in hand.
+number:
+  - platform: template
+    id: reservoir_low_threshold
+    name: "Reservoir Low Threshold"
+    unit_of_measurement: "mm"
+    optimistic: true
+    restore_value: true
+    initial_value: 150
+    min_value: 20
+    max_value: 400
+    step: 5
+    entity_category: config
+    mode: box
+
+# ── Relays (ADR-009): pump + 3 valves on DIRECT GPIO, active-low (no expander) ──
+# Exposed to HA for maintenance/purge/bench use. water_plant is the normal path;
+# flood forces all of these OFF regardless (see binary_sensor).
+switch:
+  - platform: gpio
+    name: "Zone B Pump"
+    id: pump
+    pin:
+      number: GPIO18
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    name: "Zone B Valve 1"
+    id: valve_1
+    pin:
+      number: GPIO13
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    name: "Zone B Valve 2"
+    id: valve_2
+    pin:
+      number: GPIO16
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    name: "Zone B Valve 3 (Rubber Tree)"
+    id: valve_3
+    pin:
+      number: GPIO17
+      inverted: true
+    restore_mode: ALWAYS_OFF
+
+  # Master watering disable (ADR-008 global interlock). Persists across reboots.
+  - platform: template
+    name: "Zone B Watering Disable"
+    id: global_disable
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+# ── water_plant(N, seconds): the one safe watering primitive (ADR-008) ─────────
+# Sequence: refuse if any interlock active → pump on → 500 ms prime → open valve
+# N → run (seconds, hard-clamped to 8 s) → close valve → pump off.
+# mode: single ⇒ no overlapping sips (one valve open at a time, ADR-002).
+script:
+  - id: water_plant
+    mode: single
+    parameters:
+      plant: int
+      seconds: int
+    then:
+      - if:
+          condition:
+            lambda: 'return id(zone_b_flood).state || id(reservoir_low).state || id(global_disable).state;'
+          then:
+            - logger.log:
+                format: "water_plant(%d) REFUSED: flood=%d reservoir_low=%d disable=%d"
+                args: ['plant', 'id(zone_b_flood).state', 'id(reservoir_low).state', 'id(global_disable).state']
+          else:
+            - if:
+                condition:
+                  lambda: 'return plant < 1 || plant > 3;'
+                then:
+                  - logger.log:
+                      format: "water_plant: invalid plant %d (expected 1-3)"
+                      args: ['plant']
+                else:
+                  - switch.turn_on: pump
+                  - delay: 500ms   # prime the pump before any valve opens (ADR-002)
+                  - lambda: |-
+                      switch (plant) {
+                        case 1: id(valve_1).turn_on(); break;
+                        case 2: id(valve_2).turn_on(); break;
+                        case 3: id(valve_3).turn_on(); break;
+                      }
+                  # Hard max-sip clamp (ESP32-owned): no single sip exceeds 8 s.
+                  # Retune after bench flow test.
+                  - delay: !lambda |-
+                      int s = seconds;
+                      if (s < 0) s = 0;
+                      if (s > 8) s = 8;
+                      return s * 1000;
+                  # Close all valves so a bad `plant` value can't leave one open.
+                  - switch.turn_off: valve_1
+                  - switch.turn_off: valve_2
+                  - switch.turn_off: valve_3
+                  - switch.turn_off: pump
