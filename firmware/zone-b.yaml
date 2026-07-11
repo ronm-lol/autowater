@@ -274,12 +274,13 @@ script:
                         case 2: id(valve_2).turn_on(); break;
                         case 3: id(valve_3).turn_on(); break;
                       }
-                  # Hard max-sip clamp (ESP32-owned): no single sip exceeds 8 s.
-                  # Retune after bench flow test.
+                  # Hard max-sip clamp (ESP32-owned): no single sip exceeds 4 s.
+                  # Bench 2026-07-10: measured ~652 mL/min through-valve, so 4 s
+                  # ≈ 43 mL (8 s would be ~87 mL — overfills an 8-12 cm pot).
                   - delay: !lambda |-
                       int s = seconds;
                       if (s < 0) s = 0;
-                      if (s > 8) s = 8;
+                      if (s > 4) s = 4;
                       return s * 1000;
                   # Close all valves so a bad `plant` value can't leave one open.
                   - switch.turn_off: valve_1
